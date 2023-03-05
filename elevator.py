@@ -317,4 +317,4 @@ def unit_test_hardcoded():
 
 
 if __name__ == "__main__":
-    unit_test()
+    unit_test_hardcoded()
