@@ -245,7 +245,6 @@ def elevator_directions(elevator):
 def scan_policy(simulation: Building):
     ups, downs = lobby_direction_requests(lobby)
     actions = [ELEVATOR_STOP for _ in range(NUM_ELEVATORS)]
-
     for idx, elevator in enumerate(simulation.elevators):
         old_direction = elevator.previous_action
         #  (down indicator, up indicator)
@@ -258,7 +257,7 @@ def scan_policy(simulation: Building):
             elif person.target_floor - person.origin_floor < 0:
                 person_direction = ELEVATOR_DOWN
 
-            if person.origin_floor == elevator.curr_floor and person_direction == elevator.previous_action:
+            if person.origin_floor == elevator.curr_floor and (person_direction == elevator.previous_action or elevator.previous_action == ELEVATOR_STOP):
                 actions[idx] = ELEVATOR_LOAD_UNLOAD
                 break
 
@@ -279,13 +278,18 @@ def scan_policy(simulation: Building):
         #  (down indicator, up indicator)
         extern_directions = (
             sum(downs[:elevator.curr_floor]), sum(ups[elevator.curr_floor:]))
+
         if old_direction == ELEVATOR_UP or old_direction == ELEVATOR_STOP:
-            if inter_directions[1] == 1 or extern_directions[1]:
+            if inter_directions[1] == 1 or extern_directions[1] > 0:
                 actions[idx] = ELEVATOR_UP
-        if old_direction == ELEVATOR_DOWN or old_direction == ELEVATOR_STOP:
-            if inter_directions[0] == 1 or extern_directions[0]:
+            elif inter_directions[0] == 1 or extern_directions[0] > 0:
                 actions[idx] = ELEVATOR_DOWN
 
+        if old_direction == ELEVATOR_DOWN or old_direction == ELEVATOR_STOP:
+            if inter_directions[0] == 1 or extern_directions[0] > 0:
+                actions[idx] = ELEVATOR_DOWN
+            elif inter_directions[1] == 1 or extern_directions[1] > 0:
+                actions[idx] = ELEVATOR_UP
     return actions
 
 # Simple unit test for simulator
@@ -322,4 +326,26 @@ def unit_test_hardcoded(render=False):
 
 
 if __name__ == "__main__":
-    unit_test_hardcoded()
+    # Make sure we can initialize the elevator.
+    people_gen = [PersonGenerator(1) for _ in range(3)]
+    simulation = Building(people_gen, 1)
+    actions = [ELEVATOR_STOP for _ in range(1)]
+
+    person1 = Person(0, 0, 2)
+    person2 = Person(1, 1, 2)
+    person3 = Person(2, 1, 0)
+
+    lobby.add(person1)
+    lobby.add(person2)
+    lobby.add(person3)
+
+    simulation.render()
+    found_policy = []
+
+    for _ in range(15):
+        policy = scan_policy(simulation)
+        print(policy)
+        simulation.step(policy)
+        simulation.render()
+        found_policy.append(policy)
+    print(found_policy)
