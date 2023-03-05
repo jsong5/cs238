@@ -291,7 +291,7 @@ def scan_policy(simulation: Building):
 # Simple unit test for simulator
 
 
-def unit_test_hardcoded():
+def unit_test_hardcoded(render=False):
     # Make sure we can initialize the elevator.
     people_gen = [PersonGenerator(1) for _ in range(3)]
     simulation = Building(people_gen, 1)
@@ -305,15 +305,20 @@ def unit_test_hardcoded():
     lobby.add(person2)
     lobby.add(person3)
 
-    policy = [2, 0, 1, 2, 0, 0, 1, 2, 0, -1, -1, 2, 0, 0]
-    simulation.render()
+    policy = [2, 0, 1, 2, 0, 0, 1, 2, 0, -1, -1, 2]
+    if render:
+        simulation.render()
 
     for action in policy:
         simulation.step(actions)
         policy = [action]
         simulation.step(policy)
-        simulation.render()
-        print(policy)
+        if render:
+            simulation.render()
+            print(policy)
+    assert (len(lobby) == 0 and len(
+        simulation.elevators[0].passengers) == 0 and simulation.elevators[0].curr_floor == 0)
+    print("TEST PASSED!")
 
 
 if __name__ == "__main__":
