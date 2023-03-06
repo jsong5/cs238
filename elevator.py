@@ -182,9 +182,16 @@ class Building(object):
     # Takes an Action and returns next state, reward.
     def step(self, elevator_actions):
         assert (len(elevator_actions) == len(self.elevators))
+
+        old_done_count = len(done_people)
         times = []
         for idx, elevator in enumerate(self.elevators):
             times.append(elevator.move(elevator_actions[idx]))
+
+        people_serviced_this_round = len(done_people) - old_done_count
+
+        # Should always be n - 1
+        return people_serviced_this_round * 10 - max(times)
 
     # Displays the current state of the building
     def render(self):
@@ -342,10 +349,14 @@ if __name__ == "__main__":
     simulation.render()
     found_policy = []
 
+    rewards = []
     for _ in range(15):
         policy = scan_policy(simulation)
         print(policy)
-        simulation.step(policy)
+        reward = simulation.step(policy)
+        rewards.append(reward)
         simulation.render()
         found_policy.append(policy)
     print(found_policy)
+    print("Reward: ", sum(rewards))
+    print("Episodic Reward", rewards)
