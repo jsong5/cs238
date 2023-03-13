@@ -37,7 +37,7 @@ class Person(object):
 
     def default_person_policy(self, elevator):
         direction = 0
-        if elevator.previous_action == 0:
+        if elevator.previous_action == 0 or self.curr_floor == NUM_FLOORS - 1 or self.curr_floor == 0:
             return True
 
         if self.curr_floor <= self.target_floor:
@@ -47,6 +47,8 @@ class Person(object):
         return elevator.previous_action == direction
 
     def __init__(self, id, curr_floor, target_floor, person_policy_fn=default_person_policy):
+        if not (curr_floor >= 0 and target_floor < NUM_FLOORS):
+            pdb.set_trace()
         assert (curr_floor >= 0 and target_floor < NUM_FLOORS)
         self.id = id
         self.target_floor = target_floor
@@ -68,7 +70,7 @@ class Elevator(object):
     Elevator object representation
     """
 
-    def __init__(self, speed=1, highest_floor=10, lowest_floor=0, capacity=20):
+    def __init__(self, speed=1, highest_floor=NUM_FLOORS - 1, lowest_floor=0, capacity=20):
         # Elevator Acend speed
         self.speed = speed
 
@@ -141,7 +143,7 @@ class Elevator(object):
         # Load people
         for person in lobby:
             elevator = self
-            if person.person_policy_fn(person, elevator) and person.curr_floor == self.curr_floor:
+            if person.person_policy_fn(person, elevator) and person.curr_floor == self.curr_floor and self.capacity > len(new_cart):
                 # Leave and go to cart
                 self.cooldown += 1
                 new_cart.add(person)
@@ -154,14 +156,34 @@ class Elevator(object):
         return 1
 
 
+global num_people_generated
+num_people_generated = 0
+
+
 class PersonGenerator(object):
     # Generator for people on each floor.
-    def __init__(self, random_process=np.random.poisson, parameter_tuple=(1)):
+    def __init__(self, floor, random_process=np.random.poisson, parameter_tuple=((1))):
         self.generator = random_process
         self.param = parameter_tuple
+        self.floor = floor
+
+    def make_random_person(self):
+        global num_people_generated
+        person = Person(num_people_generated, curr_floor=self.floor,
+                        target_floor=np.random.randint(NUM_FLOORS))
+        num_people_generated += 1
+
+        if person.curr_floor == person.target_floor:
+            return None
+        return person
 
     def sample(self):
-        return self.generator(*self.param)
+        people_list = []
+        for _ in range(self.generator(self.param)):
+            person = self.make_random_person()
+            if person:
+                people_list.append(person)
+        return people_list
 
 
 class Building(object):
@@ -213,14 +235,14 @@ class Building(object):
 
             print(location)
 
-            print("ELEVATOR TARGETS:", idx)
+            print("INSIDE ELEVATOR:", idx)
             for person in self.elevators[idx].passengers:
                 elevator_arr[person.target_floor] += 1
             print(elevator_arr)
         print("------------END--------------")
 
 
-def lobby_direction_requests(people_representation: set()):
+def direction_requests(people_representation: set()):
     # Up and down indicator containers for the floors.
     ups = [0 for _ in range(NUM_FLOORS)]
     downs = [0 for _ in range(NUM_FLOORS)]
@@ -248,55 +270,80 @@ def elevator_directions(elevator):
 
     return going_down, going_up
 
+# Of the form [lobby up, lobby down, elevator up, elevator down, ]
+
+
+def simple_elevator_local_state(elevator: Elevator):
+    floor = elevator.curr_floor
+    extern_ups, extern_downs = direction_requests(lobby)
+    intern_ups, intern_downs = direction_requests(elevator.passengers)
+    extern_up_up = sum(extern_ups[floor:])
+    extern_down_down = sum(extern_downs[:floor])
+
+    intern_up_up = sum(intern_ups)
+    intern_down_down = sum(intern_downs)
+
+    extern_up_down = sum(extern_downs[floor:])
+    extern_down_up = sum(extern_ups[:floor])
+
+    return extern_up_up > 0, extern_down_down > 0, intern_up_up > 0, intern_down_down > 0, extern_up_down > 0, extern_down_up > 0
+
 
 def scan_policy(simulation: Building):
-    ups, downs = lobby_direction_requests(lobby)
     actions = [ELEVATOR_STOP for _ in range(NUM_ELEVATORS)]
     for idx, elevator in enumerate(simulation.elevators):
-        old_direction = elevator.previous_action
-        #  (down indicator, up indicator)
+        extern_up_up, extern_down_down, intern_up_up, intern_down_down, extern_up_down, extern_down_up = simple_elevator_local_state(
+            elevator)
+        elevator_stall = (elevator.curr_floor == ELEVATOR_DOWN and elevator.curr_floor == 0) or (
+            elevator.curr_floor == ELEVATOR_UP and elevator.curr_floor == NUM_FLOORS - 1) or (elevator.previous_action == ELEVATOR_STOP)
 
-        # Check load from lobby
+        # Already going up
+        if elevator.previous_action == ELEVATOR_UP:
+            if extern_up_up or intern_up_up or extern_up_down:
+                actions[idx] = ELEVATOR_UP
+            elif extern_down_down or intern_down_down or extern_down_up:
+                actions[idx] = ELEVATOR_DOWN
+
+        # Already down
+        elif elevator.previous_action == ELEVATOR_DOWN:
+            if extern_down_down or intern_down_down or extern_down_up:
+                actions[idx] = ELEVATOR_DOWN
+            elif extern_up_up or intern_up_up or extern_up_down:
+                actions[idx] = ELEVATOR_UP
+
+        # Already Stopped
+        else:
+            assert (elevator.previous_action == ELEVATOR_STOP)
+            if extern_down_down or intern_down_down or extern_down_up:
+                actions[idx] = ELEVATOR_DOWN
+            elif extern_up_up or intern_up_up or extern_up_down:
+                actions[idx] = ELEVATOR_UP
+
+        # Decide to stop or not
         for person in lobby:
-            person_direction = 0
-            if person.target_floor - person.origin_floor > 0:
-                person_direction = ELEVATOR_UP
-            elif person.target_floor - person.origin_floor < 0:
-                person_direction = ELEVATOR_DOWN
+            if person.curr_floor == elevator.curr_floor:
+                person_direction = (person.target_floor -
+                                    elevator.curr_floor > 0)
+                if person_direction == elevator.previous_action or elevator_stall:
+                    actions[idx] = ELEVATOR_LOAD_UNLOAD
+                    break
 
-            if person.origin_floor == elevator.curr_floor and (person_direction == elevator.previous_action or elevator.previous_action == ELEVATOR_STOP):
-                actions[idx] = ELEVATOR_LOAD_UNLOAD
-                break
+                if elevator.previous_action == ELEVATOR_DOWN and not (extern_down_down or intern_down_down or extern_down_up):
+                    actions[idx] = ELEVATOR_LOAD_UNLOAD
+                    break
 
-        # Check unload from cart
+                if elevator.previous_action == ELEVATOR_UP and not (extern_up_up or intern_up_up or extern_up_down):
+                    actions[idx] = ELEVATOR_LOAD_UNLOAD
+                    break
+
         for person in elevator.passengers:
             if person.target_floor == elevator.curr_floor:
                 actions[idx] = ELEVATOR_LOAD_UNLOAD
                 break
 
-            # break if we need to stop
-        if actions[idx] == ELEVATOR_LOAD_UNLOAD:
-            continue
+        if (actions[idx] == ELEVATOR_DOWN and elevator.curr_floor == 0) or (actions[idx] == ELEVATOR_UP and elevator.curr_floor == NUM_FLOORS - 1):
+            pdb.set_trace()
 
-        # Otherwise we check if we need to keep moving.
-
-        #  (down indicator, up indicator)
-        inter_directions = elevator_directions(elevator)
-        #  (down indicator, up indicator)
-        extern_directions = (
-            sum(downs[:elevator.curr_floor]), sum(ups[elevator.curr_floor:]))
-
-        if old_direction == ELEVATOR_UP or old_direction == ELEVATOR_STOP:
-            if inter_directions[1] == 1 or extern_directions[1] > 0:
-                actions[idx] = ELEVATOR_UP
-            elif inter_directions[0] == 1 or extern_directions[0] > 0:
-                actions[idx] = ELEVATOR_DOWN
-
-        if old_direction == ELEVATOR_DOWN or old_direction == ELEVATOR_STOP:
-            if inter_directions[0] == 1 or extern_directions[0] > 0:
-                actions[idx] = ELEVATOR_DOWN
-            elif inter_directions[1] == 1 or extern_directions[1] > 0:
-                actions[idx] = ELEVATOR_UP
     return actions
 
 # Simple unit test for simulator
@@ -304,7 +351,7 @@ def scan_policy(simulation: Building):
 
 def unit_test_hardcoded(render=False):
     # Make sure we can initialize the elevator.
-    people_gen = [PersonGenerator(1) for _ in range(3)]
+    people_gen = [PersonGenerator(floor) for floor in range(3)]
     simulation = Building(people_gen, 1)
     actions = [ELEVATOR_STOP for _ in range(1)]
 
@@ -329,12 +376,14 @@ def unit_test_hardcoded(render=False):
             print(policy)
     assert (len(lobby) == 0 and len(
         simulation.elevators[0].passengers) == 0 and simulation.elevators[0].curr_floor == 0)
-    print("TEST PASSED!")
+    print("HARDCODE TEST PASSED!")
 
 
-if __name__ == "__main__":
-    # Make sure we can initialize the elevator.
-    people_gen = [PersonGenerator(1) for _ in range(3)]
+# def small_state_space(simulation):
+
+
+def unit_test_scan(render=False):
+    people_gen = [PersonGenerator(floor) for floor in range(3)]
     simulation = Building(people_gen, 1)
     actions = [ELEVATOR_STOP for _ in range(1)]
 
@@ -345,18 +394,64 @@ if __name__ == "__main__":
     lobby.add(person1)
     lobby.add(person2)
     lobby.add(person3)
-
-    simulation.render()
+    if render:
+        simulation.render()
     found_policy = []
 
     rewards = []
     for _ in range(15):
+        policy = scan_policy(simulation)
+        if render:
+            print(policy)
+        reward = simulation.step(policy)
+        rewards.append(reward)
+        if render:
+            simulation.render()
+        found_policy.append(policy)
+    if render:
+        print(found_policy)
+        print("Reward: ", sum(rewards))
+        print("Episodic Reward", rewards)
+    assert (len(lobby) == 0 and len(
+        simulation.elevators[0].passengers) == 0 and simulation.elevators[0].curr_floor == 0)
+    print("SCAN TEST PASSED!")
+
+
+if __name__ == "__main__":
+    # Make sure we can initialize the elevator.
+    # unit_test_hardcoded()
+    # unit_test_scan()
+
+    people_gen = [PersonGenerator(floor) for floor in range(NUM_FLOORS)]
+    simulation = Building(people_gen, 1)
+    actions = [ELEVATOR_STOP for _ in range(1)]
+
+    person1 = Person(0, 0, 2)
+    person2 = Person(1, 1, 2)
+    person3 = Person(2, 1, 0)
+
+    lobby.add(person1)
+    lobby.add(person2)
+    lobby.add(person3)
+    simulation.render()
+    found_policy = []
+
+    generation_rounds = [1, 3, 5]
+
+    rewards = []
+    for i in range(30):
+        # Seeded generation rounds
+        if i in generation_rounds:
+            for idx, generator in enumerate(people_gen):
+                for person in generator.sample():
+                    lobby.add(person)
+
         policy = scan_policy(simulation)
         print(policy)
         reward = simulation.step(policy)
         rewards.append(reward)
         simulation.render()
         found_policy.append(policy)
-    print(found_policy)
-    print("Reward: ", sum(rewards))
-    print("Episodic Reward", rewards)
+        print(found_policy)
+        print("Reward: ", sum(rewards))
+        print("Episodic Reward", rewards)
