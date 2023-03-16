@@ -3,6 +3,9 @@ from enum import Enum
 import pdb
 from copy import deepcopy
 
+import gym
+from gym import spaces
+
 # Hard coded tactics: always have 20 floors, 4 elevators, we will test 4 policies
 # Baselines: 4 way scan, and 4 way zoning scans.
 # Advanced: 1 way scan and centralized 3 way RL policy
@@ -20,7 +23,7 @@ ELEVATOR_LOAD_UNLOAD = 2
 """
 Num Floors
 """
-NUM_FLOORS = 3
+NUM_FLOORS = 10
 NUM_ELEVATORS = 1
 
 # global lobby
@@ -95,6 +98,7 @@ class Elevator(object):
     # Take a simulation step from the elevator.
     def move(self, action, lobby_holder, done_set):
         total_time = 0
+        num_people_loaded = 0
 
         if self.cooldown > 0:
             # Wait for cooldown
@@ -103,7 +107,9 @@ class Elevator(object):
 
         if action == ELEVATOR_LOAD_UNLOAD:
             # Load all passengers
-            total_time += self.load_unload_passengers(lobby_holder, done_set)
+            time, num = self.load_unload_passengers(lobby_holder, done_set)
+            total_time += time
+            num_people_loaded += num
 
         else:
             # Update the elevator
@@ -117,18 +123,19 @@ class Elevator(object):
             self.previous_action = action
             total_time += 1
 
-        return total_time
+        return total_time, num_people_loaded
 
     # Might be sufficient.
     def load_unload_passengers(self, lobby_holder, done_set):
         new_lobby = set()
         new_cart = set()
+        num_people_loaded = 0
         # Unload people
         for person in self.passengers:
             if person.target_floor == self.curr_floor:
                 # Leaving, and go to done
                 done_set[0].add(person)
-                self.cooldown += 0.1
+                # self.cooldown += 0.1
             else:
                 # Not leaving, stay in cart
                 new_cart.add(person)
@@ -138,33 +145,28 @@ class Elevator(object):
             elevator = self
             if person.person_policy_fn(person, elevator) and person.curr_floor == self.curr_floor and self.capacity > len(new_cart):
                 # Leave and go to cart
-                self.cooldown += 0.1
+                # self.cooldown += 0.1
                 new_cart.add(person)
+                num_people_loaded += 1
             else:
                 # Not leaving, stay in lobby
                 new_lobby.add(person)
         self.cooldown = int(self.cooldown)
         lobby_holder[0] = new_lobby
         self.passengers = new_cart
-        return 1
-
-
-global num_people_generated
-num_people_generated = 0
+        return 1, num_people_loaded
 
 
 class PersonGenerator(object):
     # Generator for people on each floor.
-    def __init__(self, floor, random_process=np.random.poisson, parameter_tuple=((1))):
+    def __init__(self, floor, random_process=np.random.poisson, parameter_tuple=((0.2))):
         self.generator = random_process
         self.param = parameter_tuple
         self.floor = floor
 
     def make_random_person(self):
-        global num_people_generated
-        person = Person(num_people_generated, curr_floor=self.floor,
+        person = Person(0, curr_floor=self.floor,
                         target_floor=np.random.randint(NUM_FLOORS))
-        num_people_generated += 1
 
         if person.curr_floor == person.target_floor:
             return None
@@ -179,17 +181,30 @@ class PersonGenerator(object):
         return people_list
 
 
-class Building(object):
-    def __init__(self, people_gen, num_elevators):
+class Building(gym.Env):
+    def __init__(self, num_floors, num_elevators, max_steps=50):
+        # Things for openai gym
+        super(Building, self).__init__()
+        self.observation_space = gym.spaces.Box(low=0, high=500,
+                                                shape=(num_floors * 3 + 1, 1), dtype=np.uint8)
+        # gym.spaces.Discrete(4, start=-1)
+        self.action_space = gym.spaces.Discrete(4)
+
         # Internal generator of people.
-        self.floor_people = people_gen
+        self.max_steps = max_steps
+        self.curr_step = 0
+        self.num_people_generated = 0
+        self.max_people_generated = 500
+
+        self.people_gen = [PersonGenerator(floor)
+                           for floor in range(num_floors)]
 
         # Number of floors to initialize.
-        self.num_floors = len(people_gen)
+        self.num_floors = num_floors
 
         # Initialize the elevators.
         self.elevators = [
-            Elevator(speed=1, highest_floor=len(people_gen) - 1, lowest_floor=0) for _ in range(num_elevators)]
+            Elevator(speed=1, highest_floor=self.num_floors - 1, lowest_floor=0) for _ in range(num_elevators)]
 
         # Initial time 0.
         self.time_steps = 0
@@ -198,28 +213,95 @@ class Building(object):
         self.lobby_holder = [set()]
         self.done_people = [set()]
 
+        # Seed initial.
+        self.reset()
+
+    def close(self):
+        self.reset()
+
     def reset(self):
+        # reset elevator positions
         for elevator in self.elevators:
             elevator.passengers = set()
             elevator.curr_floor = 0
 
+        # empty queues
         self.lobby_holder = [set()]
         self.done_people = [set()]
 
+        # Initial people
+        person1 = Person(0, 0, 2)
+        person2 = Person(1, 1, 2)
+        person3 = Person(2, 1, 0)
+
+        self.lobby_holder[0].add(person1)
+        self.lobby_holder[0].add(person2)
+        self.lobby_holder[0].add(person3)
+        self.curr_step = 0
+        self.num_people_generated = 0
+
+        return self._next_observation()
+
     # Takes an Action and returns next state, reward.
     def step(self, elevator_actions):
-        assert (len(elevator_actions) == len(self.elevators))
+        # assert (len(elevator_actions) == len(self.elevators))
+        elevator_actions = [elevator_actions - 1]
+        # elevator_actions = [act - 1 for act in elevator_actions]
+
+        # Seeded generation rounds
+        if self.curr_step < self.max_steps - 10:
+            for idx, generator in enumerate(self.people_gen):
+                for person in generator.sample():
+                    if self.num_people_generated < self.max_people_generated:
+                        self.lobby_holder[0].add(person)
+                        self.num_people_generated += 1
 
         old_done_count = len(self.done_people[0])
         times = []
         for idx, elevator in enumerate(self.elevators):
-            times.append(elevator.move(
-                elevator_actions[idx], self.lobby_holder, self.done_people))
+            time, num_people_loaded = elevator.move(
+                elevator_actions[idx], self.lobby_holder, self.done_people)
+            times.append(time)
 
         people_serviced_this_round = len(self.done_people[0]) - old_done_count
-
+        self.curr_step += 1
         # Should always be n - 1
-        return people_serviced_this_round * 10 - max(times)
+        next_obs = self._next_observation()
+        reward = people_serviced_this_round * \
+            10 + 1 * num_people_loaded - max(times)
+        done = self.curr_step > self.max_steps
+
+        return next_obs, reward, done, {}
+
+    # [floor1 waiting, ... floorn waiting, floor1 target, .. floorn target, elevator1 target,..., elevatorn target, elevator floor]
+    def _next_observation(self):
+        lobby_from_obs = [0 for _ in range(NUM_FLOORS)]
+        lobby_to_obs = [0 for _ in range(NUM_FLOORS)]
+        elevator_to_obs = [0 for _ in range(NUM_FLOORS)]
+        for person in self.lobby_holder[0]:
+            lobby_from_obs[person.origin_floor] += 1
+            lobby_to_obs[person.target_floor] += 1
+
+        for person in self.elevators[0].passengers:
+            elevator_to_obs[person.target_floor] += 1
+
+        obs = lobby_from_obs + lobby_to_obs + elevator_to_obs
+
+        obs = [elem > 0 for elem in obs]
+
+        obs.append(self.elevators[0].curr_floor)
+
+        obs = np.array(obs)
+        obs = obs.reshape(-1, 1)
+
+        return obs
+
+    #  works for
+    # person1 = Person(0, 0, 2)
+    # person2 = Person(1, 1, 2)
+    # simulation.lobby_holder[0].add(person1)
+    # simulation.lobby_holder[0].add(person2)
+    # because the state space is non contaminated. However, upon adding person3 = Person(2, 1, 0), we have broken the markov assumption and q learning's guarantees no longer work as expectred.
 
     def simple_elevator_local_state(self, elevator: Elevator):
         floor = elevator.curr_floor
@@ -237,7 +319,15 @@ class Building(object):
         if (elevator.curr_floor == 0 and (intern_down_down or extern_down_up or extern_down_down)) or (elevator.curr_floor == NUM_FLOORS - 1 and (extern_up_up or intern_up_up or extern_up_down)):
             pdb.set_trace()
 
-        return extern_up_up > 0, extern_down_down > 0, intern_up_up > 0, intern_down_down > 0, extern_up_down > 0, extern_down_up > 0
+        possible_drop_offs = [
+            person for person in elevator.passengers if person.target_floor == elevator.curr_floor]
+        possible_onboards = [
+            person for person in self.lobby_holder[0] if person.origin_floor == elevator.curr_floor]
+
+        available_drop_off = len(possible_drop_offs)
+        available_onboards = len(possible_onboards)
+
+        return extern_up_up > 0, extern_down_down > 0, intern_up_up > 0, intern_down_down > 0, extern_up_down > 0, extern_down_up > 0, available_drop_off > 0, available_onboards > 0
 
     # Displays the current state of the building
     def render(self):
@@ -300,7 +390,7 @@ def elevator_directions(elevator):
 def scan_policy(simulation: Building):
     actions = [ELEVATOR_STOP for _ in range(NUM_ELEVATORS)]
     for idx, elevator in enumerate(simulation.elevators):
-        extern_up_up, extern_down_down, intern_up_up, intern_down_down, extern_up_down, extern_down_up = simulation.simple_elevator_local_state(
+        extern_up_up, extern_down_down, intern_up_up, intern_down_down, extern_up_down, extern_down_up, _, _ = simulation.simple_elevator_local_state(
             elevator)
         elevator_stall = (elevator.curr_floor == ELEVATOR_DOWN and elevator.curr_floor == 0) or (
             elevator.curr_floor == ELEVATOR_UP and elevator.curr_floor == NUM_FLOORS - 1) or (elevator.previous_action == ELEVATOR_STOP)
@@ -359,24 +449,14 @@ def scan_policy(simulation: Building):
 
 def unit_test_hardcoded(render=False):
     # Make sure we can initialize the elevator.
-    people_gen = [PersonGenerator(floor) for floor in range(3)]
-    simulation = Building(people_gen, 1)
+    simulation = Building(3, 1)
     actions = [ELEVATOR_STOP for _ in range(1)]
-
-    person1 = Person(0, 0, 2)
-    person2 = Person(1, 1, 2)
-    person3 = Person(2, 1, 0)
-
-    simulation.lobby_holder[0].add(person1)
-    simulation.lobby_holder[0].add(person2)
-    simulation.lobby_holder[0].add(person3)
 
     policy = [2, 0, 1, 2, 0, 0, 1, 2, 0, -1, -1, 2]
     if render:
         simulation.render()
 
     for action in policy:
-        simulation.step(actions)
         policy = [action]
         simulation.step(policy)
         if render:
@@ -391,17 +471,9 @@ def unit_test_hardcoded(render=False):
 
 
 def unit_test_scan(render=False):
-    people_gen = [PersonGenerator(floor) for floor in range(3)]
-    simulation = Building(people_gen, 1)
+    simulation = Building(3, 1)
     actions = [ELEVATOR_STOP for _ in range(1)]
 
-    person1 = Person(0, 0, 2)
-    person2 = Person(1, 1, 2)
-    person3 = Person(2, 1, 0)
-
-    simulation.lobby_holder[0].add(person1)
-    simulation.lobby_holder[0].add(person2)
-    simulation.lobby_holder[0].add(person3)
     if render:
         simulation.render()
     found_policy = []
@@ -411,7 +483,7 @@ def unit_test_scan(render=False):
         policy = scan_policy(simulation)
         if render:
             print(policy)
-        reward = simulation.step(policy)
+        _, reward, _, _ = simulation.step(policy)
         rewards.append(reward)
         if render:
             simulation.render()
@@ -430,33 +502,25 @@ if __name__ == "__main__":
     # unit_test_hardcoded()
     # unit_test_scan()
 
-    people_gen = [PersonGenerator(floor) for floor in range(NUM_FLOORS)]
-    simulation = Building(people_gen, 1)
+    gym.envs.register(
+        id='Elevator-v0',
+        entry_point='gym.envs.classic_control:LqrEnv',
+        max_episode_steps=150,
+        kwargs={'size': 1, 'init_state': 10., 'state_bound': np.inf},
+    )
+
+    simulation = Building(3, 1)
     actions = [ELEVATOR_STOP for _ in range(1)]
-
-    person1 = Person(0, 0, 2)
-    person2 = Person(1, 1, 2)
-    person3 = Person(2, 1, 0)
-
-    simulation.lobby_holder[0].add(person1)
-    simulation.lobby_holder[0].add(person2)
-    simulation.lobby_holder[0].add(person3)
     simulation.render()
     found_policy = []
 
-    generation_rounds = [1, 3, 5]
-
     rewards = []
-    for i in range(30):
-        # Seeded generation rounds
-        if i in generation_rounds:
-            for idx, generator in enumerate(people_gen):
-                for person in generator.sample():
-                    simulation.lobby_holder[0].add(person)
+    done = False
 
+    while not done:
         policy = scan_policy(simulation)
         print(policy)
-        reward = simulation.step(policy)
+        _, reward, done, _ = simulation.step(policy)
         rewards.append(reward)
         simulation.render()
         found_policy.append(policy)
