@@ -10,7 +10,7 @@ import numpy as np
 
 def train_dqn():
     print("Initializing env")
-    env = Building(10, 1, max_steps=1000)
+    env = Building(10, 10, max_steps=1000)
 
     print("Initializing model")
     # model = DQN("MlpPolicy", env, verbose=1,
@@ -25,20 +25,23 @@ def train_dqn():
 
 
 def scan():
-    env = Building(10, 1, max_steps=1000)
+    env = Building(10, 1, max_steps=100)
 
     holder = []
+    env.reset()
+
     for ep in range(100):
         done = False
         total_rew = 0
         reward = 0
 
         while not done:
-            action_temp = scan_policy(env)
+            action = scan_policy(env)
             # action_temp = np.random.randint(3)
-            action = action_temp[0] + 1
-            state, reward, done, _ = env.step(action)
-            env.render()
+            # action = action_temp[0] + 1
+            _, reward, done, _ = env.step(action)
+            # print(env.action_to_array(action))
+            # env.render()
             total_rew += reward
 
         env.reset()
@@ -49,5 +52,5 @@ def scan():
 
 
 if __name__ == "__main__":
-    # train_dqn()
-    scan()
+    train_dqn()
+    # scan()

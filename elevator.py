@@ -24,7 +24,6 @@ ELEVATOR_LOAD_UNLOAD = 2
 Num Floors
 """
 NUM_FLOORS = 10
-NUM_ELEVATORS = 1
 
 # global lobby
 # lobby = set()
@@ -40,7 +39,7 @@ class Person(object):
 
     def default_person_policy(self, elevator):
         direction = 0
-        if elevator.previous_action == 0 or self.curr_floor == NUM_FLOORS - 1 or self.curr_floor == 0:
+        if elevator.previous_action == 0 or self.curr_floor == elevator.highest_floor - 1 or self.curr_floor == 0:
             return True
 
         if self.curr_floor <= self.target_floor:
@@ -159,7 +158,7 @@ class Elevator(object):
 
 class PersonGenerator(object):
     # Generator for people on each floor.
-    def __init__(self, floor, random_process=np.random.poisson, parameter_tuple=((0.2))):
+    def __init__(self, floor, random_process=np.random.poisson, parameter_tuple=((5))):
         self.generator = random_process
         self.param = parameter_tuple
         self.floor = floor
@@ -186,11 +185,11 @@ class Building(gym.Env):
         # Things for openai gym
         super(Building, self).__init__()
         self.observation_space = gym.spaces.Box(low=0, high=500,
-                                                shape=(num_floors * 3 + 1, 1), dtype=np.uint8)
-        # gym.spaces.Discrete(4, start=-1)
-        self.action_space = gym.spaces.Discrete(4)
+                                                shape=(num_floors * (2 + num_elevators) + num_elevators, 1), dtype=np.uint8)
+        self.action_space = gym.spaces.Discrete(4 * num_elevators)
 
         # Internal generator of people.
+        self.num_elevators = num_elevators
         self.max_steps = max_steps
         self.curr_step = 0
         self.num_people_generated = 0
@@ -215,6 +214,13 @@ class Building(gym.Env):
 
         # Seed initial.
         self.reset()
+
+    def action_to_array(self, act):
+        num_elevators = len(self.elevators)
+        action_dims = tuple([4 for _ in range(num_elevators)])
+        actions = np.unravel_index(act, action_dims)
+        actions = [act - 1 for act in actions]
+        return actions
 
     def close(self):
         self.reset()
@@ -243,12 +249,13 @@ class Building(gym.Env):
         return self._next_observation()
 
     # Takes an Action and returns next state, reward.
-    def step(self, elevator_actions):
+    def step(self, action):
         # assert (len(elevator_actions) == len(self.elevators))
-        elevator_actions = [elevator_actions - 1]
+        # elevator_actions = [elevator_actions - 1]
         # elevator_actions = [act - 1 for act in elevator_actions]
 
         # Seeded generation rounds
+        elevator_actions = self.action_to_array(action)
         if self.curr_step < self.max_steps - 10:
             for idx, generator in enumerate(self.people_gen):
                 for person in generator.sample():
@@ -277,19 +284,19 @@ class Building(gym.Env):
     def _next_observation(self):
         lobby_from_obs = [0 for _ in range(NUM_FLOORS)]
         lobby_to_obs = [0 for _ in range(NUM_FLOORS)]
-        elevator_to_obs = [0 for _ in range(NUM_FLOORS)]
         for person in self.lobby_holder[0]:
             lobby_from_obs[person.origin_floor] += 1
             lobby_to_obs[person.target_floor] += 1
 
-        for person in self.elevators[0].passengers:
-            elevator_to_obs[person.target_floor] += 1
+        obs = lobby_from_obs + lobby_to_obs
+        for elevator in self.elevators:
+            elevator_to_obs = [0 for _ in range(NUM_FLOORS)]
+            for person in elevator.passengers:
+                elevator_to_obs[person.target_floor] += 1
+            obs += elevator_to_obs
+            obs.append(self.elevators[0].curr_floor)
 
-        obs = lobby_from_obs + lobby_to_obs + elevator_to_obs
-
-        obs = [elem > 0 for elem in obs]
-
-        obs.append(self.elevators[0].curr_floor)
+        # obs = [elem > 0 for elem in obs]
 
         obs = np.array(obs)
         obs = obs.reshape(-1, 1)
@@ -340,10 +347,10 @@ class Building(gym.Env):
         print(waiting_array)
 
         elevator_arrays = [
-            [0 for _ in range(NUM_FLOORS)] for _ in range(NUM_ELEVATORS)]
+            [0 for _ in range(self.num_floors)] for _ in range(self.num_elevators)]
 
         for idx, elevator_arr in enumerate(elevator_arrays):
-            print("ELEVATOR LOCATION:", idx)
+            print("ELEVATOR LOCATION For identifier:", idx)
             location = np.zeros(NUM_FLOORS)
             location[self.elevators[idx].curr_floor] = 1
 
@@ -388,7 +395,7 @@ def elevator_directions(elevator):
 
 
 def scan_policy(simulation: Building):
-    actions = [ELEVATOR_STOP for _ in range(NUM_ELEVATORS)]
+    actions = [ELEVATOR_STOP for _ in range(simulation.num_elevators)]
     for idx, elevator in enumerate(simulation.elevators):
         extern_up_up, extern_down_down, intern_up_up, intern_down_down, extern_up_down, extern_down_up, _, _ = simulation.simple_elevator_local_state(
             elevator)
@@ -441,6 +448,11 @@ def scan_policy(simulation: Building):
 
         if (actions[idx] == ELEVATOR_DOWN and elevator.curr_floor == 0) or (actions[idx] == ELEVATOR_UP and elevator.curr_floor == NUM_FLOORS - 1):
             pdb.set_trace()
+
+    actions = [action + 1 for action in actions]
+    space = [4 for _ in range(len(simulation.elevators))]
+
+    actions = np.ravel_multi_index(actions, space)
 
     return actions
 
@@ -509,7 +521,7 @@ if __name__ == "__main__":
         kwargs={'size': 1, 'init_state': 10., 'state_bound': np.inf},
     )
 
-    simulation = Building(3, 1)
+    simulation = Building(10, 1)
     actions = [ELEVATOR_STOP for _ in range(1)]
     simulation.render()
     found_policy = []

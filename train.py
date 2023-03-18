@@ -12,7 +12,7 @@ if __name__ == "__main__":
     person1 = Person(0, 0, 2)
     person2 = Person(1, 1, 2)
     person3 = Person(2, 1, 0)
-
+å
     simulation.lobby_holder[0].add(person1)
     simulation.lobby_holder[0].add(person2)
     simulation.lobby_holder[0].add(person3)
