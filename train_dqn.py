@@ -8,13 +8,13 @@ import pdb
 import numpy as np
 
 
-def train_dqn():
+def train_dqn(env):
     print("Initializing env")
-    env = Building(10, 10, max_steps=1000)
 
     print("Initializing model")
     # model = DQN("MlpPolicy", env, verbose=1,
     #             learning_rate=0.001, exploration_final_eps=0.1)
+    # model = DQN("MlpPolicy", env, verbose=1)
     model = PPO("MlpPolicy", env, verbose=1)
 
     print("Training model")
@@ -24,8 +24,7 @@ def train_dqn():
     model.save("deepq_elevator")
 
 
-def scan():
-    env = Building(10, 1, max_steps=100)
+def scan(env):
 
     holder = []
     env.reset()
@@ -39,8 +38,9 @@ def scan():
             action = scan_policy(env)
             # action_temp = np.random.randint(3)
             # action = action_temp[0] + 1
-            _, reward, done, _ = env.step(action)
-            # print(env.action_to_array(action))
+            # print(action)
+            # env.render()
+            _, reward, done, info = env.step(action)
             # env.render()
             total_rew += reward
 
@@ -52,5 +52,7 @@ def scan():
 
 
 if __name__ == "__main__":
-    train_dqn()
-    # scan()
+    env = Building(3, 1, max_steps=20)
+
+    train_dqn(env)
+    scan(env)

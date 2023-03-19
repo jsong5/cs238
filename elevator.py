@@ -23,7 +23,7 @@ ELEVATOR_LOAD_UNLOAD = 2
 """
 Num Floors
 """
-NUM_FLOORS = 10
+NUM_FLOORS = 3
 
 # global lobby
 # lobby = set()
@@ -48,16 +48,14 @@ class Person(object):
             direction = ELEVATOR_DOWN
         return elevator.previous_action == direction
 
-    def __init__(self, id, curr_floor, target_floor, person_policy_fn=default_person_policy):
-        if not (curr_floor >= 0 and target_floor < NUM_FLOORS):
-            pdb.set_trace()
-        assert (curr_floor >= 0 and target_floor < NUM_FLOORS)
+    def __init__(self, id, curr_floor, target_floor, start_time, person_policy_fn=default_person_policy):
         self.id = id
         self.target_floor = target_floor
         self.origin_floor = curr_floor
         self.curr_floor = curr_floor
         self.person_policy_fn = person_policy_fn
         self.assigned_elevator = None
+        self.start_time = start_time
 
     def assign_elevator(self, elevator):
         self.assigned_elevator = elevator
@@ -134,7 +132,7 @@ class Elevator(object):
             if person.target_floor == self.curr_floor:
                 # Leaving, and go to done
                 done_set[0].add(person)
-                # self.cooldown += 0.1
+                self.cooldown += 0.1
             else:
                 # Not leaving, stay in cart
                 new_cart.add(person)
@@ -144,12 +142,13 @@ class Elevator(object):
             elevator = self
             if person.person_policy_fn(person, elevator) and person.curr_floor == self.curr_floor and self.capacity > len(new_cart):
                 # Leave and go to cart
-                # self.cooldown += 0.1
+                self.cooldown += 0.1
                 new_cart.add(person)
                 num_people_loaded += 1
             else:
                 # Not leaving, stay in lobby
                 new_lobby.add(person)
+
         self.cooldown = int(self.cooldown)
         lobby_holder[0] = new_lobby
         self.passengers = new_cart
@@ -158,14 +157,15 @@ class Elevator(object):
 
 class PersonGenerator(object):
     # Generator for people on each floor.
-    def __init__(self, floor, random_process=np.random.poisson, parameter_tuple=((5))):
+    def __init__(self, floor, building, random_process=np.random.poisson, parameter_tuple=(0.1)):
         self.generator = random_process
         self.param = parameter_tuple
         self.floor = floor
+        self.building = building
 
     def make_random_person(self):
-        person = Person(0, curr_floor=self.floor,
-                        target_floor=np.random.randint(NUM_FLOORS))
+        person = Person(0, curr_floor=self.floor, target_floor=np.random.randint(
+            self.building.num_floors), start_time=self.building.curr_step)
 
         if person.curr_floor == person.target_floor:
             return None
@@ -195,7 +195,7 @@ class Building(gym.Env):
         self.num_people_generated = 0
         self.max_people_generated = 500
 
-        self.people_gen = [PersonGenerator(floor)
+        self.people_gen = [PersonGenerator(floor, self)
                            for floor in range(num_floors)]
 
         # Number of floors to initialize.
@@ -236,9 +236,9 @@ class Building(gym.Env):
         self.done_people = [set()]
 
         # Initial people
-        person1 = Person(0, 0, 2)
-        person2 = Person(1, 1, 2)
-        person3 = Person(2, 1, 0)
+        person1 = Person(0, 0, 2, 0)
+        person2 = Person(1, 1, 2, 0)
+        person3 = Person(2, 1, 0, 0)
 
         self.lobby_holder[0].add(person1)
         self.lobby_holder[0].add(person2)
@@ -248,7 +248,20 @@ class Building(gym.Env):
 
         return self._next_observation()
 
+    def total_wait_time(self):
+        waiting_room = self.lobby_holder[0]
+        people_areas = [elevator.passengers for elevator in self.elevators]
+        people_areas.append(waiting_room)
+
+        total_time = 0
+        for cart in people_areas:
+            for person in cart:
+                total_time += (self.curr_step - person.start_time)
+
+        return total_time
+
     # Takes an Action and returns next state, reward.
+
     def step(self, action):
         # assert (len(elevator_actions) == len(self.elevators))
         # elevator_actions = [elevator_actions - 1]
@@ -276,21 +289,24 @@ class Building(gym.Env):
         next_obs = self._next_observation()
         reward = people_serviced_this_round * \
             10 + 1 * num_people_loaded - max(times)
+        total_time = self.total_wait_time()
+        reward = -total_time
         done = self.curr_step > self.max_steps
+        # print(total_time)
 
-        return next_obs, reward, done, {}
+        return next_obs, reward, done, {"total_time": total_time}
 
     # [floor1 waiting, ... floorn waiting, floor1 target, .. floorn target, elevator1 target,..., elevatorn target, elevator floor]
     def _next_observation(self):
-        lobby_from_obs = [0 for _ in range(NUM_FLOORS)]
-        lobby_to_obs = [0 for _ in range(NUM_FLOORS)]
+        lobby_from_obs = [0 for _ in range(self.num_floors)]
+        lobby_to_obs = [0 for _ in range(self.num_floors)]
         for person in self.lobby_holder[0]:
             lobby_from_obs[person.origin_floor] += 1
             lobby_to_obs[person.target_floor] += 1
 
         obs = lobby_from_obs + lobby_to_obs
         for elevator in self.elevators:
-            elevator_to_obs = [0 for _ in range(NUM_FLOORS)]
+            elevator_to_obs = [0 for _ in range(self.num_floors)]
             for person in elevator.passengers:
                 elevator_to_obs[person.target_floor] += 1
             obs += elevator_to_obs
@@ -323,7 +339,7 @@ class Building(gym.Env):
         extern_up_down = sum(extern_downs[floor+1:])
         extern_down_up = sum(extern_ups[:floor])
 
-        if (elevator.curr_floor == 0 and (intern_down_down or extern_down_up or extern_down_down)) or (elevator.curr_floor == NUM_FLOORS - 1 and (extern_up_up or intern_up_up or extern_up_down)):
+        if (elevator.curr_floor == 0 and (intern_down_down or extern_down_up or extern_down_down)) or (elevator.curr_floor == self.num_floors - 1 and (extern_up_up or intern_up_up or extern_up_down)):
             pdb.set_trace()
 
         possible_drop_offs = [
@@ -341,7 +357,7 @@ class Building(gym.Env):
         print("------------START--------------")
         print("Lobby")
 
-        waiting_array = [0 for _ in range(NUM_FLOORS)]
+        waiting_array = [0 for _ in range(self.num_floors)]
         for person in self.lobby_holder[0]:
             waiting_array[person.curr_floor] += 1
         print(waiting_array)
@@ -351,7 +367,7 @@ class Building(gym.Env):
 
         for idx, elevator_arr in enumerate(elevator_arrays):
             print("ELEVATOR LOCATION For identifier:", idx)
-            location = np.zeros(NUM_FLOORS)
+            location = np.zeros(self.num_floors)
             location[self.elevators[idx].curr_floor] = 1
 
             print(location)
