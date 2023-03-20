@@ -23,7 +23,7 @@ ELEVATOR_LOAD_UNLOAD = 2
 """
 Num Floors
 """
-NUM_FLOORS = 3
+NUM_FLOORS = 10
 
 # global lobby
 # lobby = set()
@@ -56,6 +56,7 @@ class Person(object):
         self.person_policy_fn = person_policy_fn
         self.assigned_elevator = None
         self.start_time = start_time
+        self.done_time = 1000000
 
     def assign_elevator(self, elevator):
         self.assigned_elevator = elevator
@@ -100,7 +101,7 @@ class Elevator(object):
         if self.cooldown > 0:
             # Wait for cooldown
             self.cooldown -= 1
-            return 1
+            return 1, 0
 
         if action == ELEVATOR_LOAD_UNLOAD:
             # Load all passengers
@@ -131,6 +132,7 @@ class Elevator(object):
         for person in self.passengers:
             if person.target_floor == self.curr_floor:
                 # Leaving, and go to done
+                person.end_time = done_set[1]
                 done_set[0].add(person)
                 self.cooldown += 0.1
             else:
@@ -157,7 +159,7 @@ class Elevator(object):
 
 class PersonGenerator(object):
     # Generator for people on each floor.
-    def __init__(self, floor, building, random_process=np.random.poisson, parameter_tuple=(0.1)):
+    def __init__(self, floor, building, random_process=np.random.poisson, parameter_tuple=(0.01)):
         self.generator = random_process
         self.param = parameter_tuple
         self.floor = floor
@@ -181,7 +183,7 @@ class PersonGenerator(object):
 
 
 class Building(gym.Env):
-    def __init__(self, num_floors, num_elevators, max_steps=50):
+    def __init__(self, num_floors, num_elevators, people_lambda=0.02, max_steps=50):
         # Things for openai gym
         super(Building, self).__init__()
         self.observation_space = gym.spaces.Box(low=0, high=500,
@@ -195,7 +197,7 @@ class Building(gym.Env):
         self.num_people_generated = 0
         self.max_people_generated = 500
 
-        self.people_gen = [PersonGenerator(floor, self)
+        self.people_gen = [PersonGenerator(floor, self, parameter_tuple=(people_lambda))
                            for floor in range(num_floors)]
 
         # Number of floors to initialize.
@@ -209,8 +211,8 @@ class Building(gym.Env):
         self.time_steps = 0
 
         # Global sets.
-        self.lobby_holder = [set()]
-        self.done_people = [set()]
+        self.lobby_holder = [set(), 0]
+        self.done_people = [set(), 0]
 
         # Seed initial.
         self.reset()
@@ -232,8 +234,8 @@ class Building(gym.Env):
             elevator.curr_floor = 0
 
         # empty queues
-        self.lobby_holder = [set()]
-        self.done_people = [set()]
+        self.lobby_holder = [set(), 0]
+        self.done_people = [set(), 0]
 
         # Initial people
         person1 = Person(0, 0, 2, 0)
@@ -285,16 +287,32 @@ class Building(gym.Env):
 
         people_serviced_this_round = len(self.done_people[0]) - old_done_count
         self.curr_step += 1
+        self.done_people[1] += 1
         # Should always be n - 1
         next_obs = self._next_observation()
         reward = people_serviced_this_round * \
             10 + 1 * num_people_loaded - max(times)
-        total_time = self.total_wait_time()
-        reward = -total_time
-        done = self.curr_step > self.max_steps
-        # print(total_time)
 
-        return next_obs, reward, done, {"total_time": total_time}
+        # reward = - total_time
+        done = self.curr_step > self.max_steps
+        total_time = 0
+        people_remain = 0
+        total_people = 0
+        if done:
+            total_people = len(self.done_people[0])
+            total_time = sum(
+                [person.end_time - person.start_time for person in self.done_people[0]])
+
+            total_time += sum([self.curr_step -
+                               person.start_time for person in self.lobby_holder[0]])
+            people_remain = len(self.lobby_holder[0])
+            for elevator in self.elevators:
+                total_time += sum([self.curr_step -
+                                   person.start_time for person in elevator.passengers])
+                people_remain += len(elevator.passengers)
+            total_people += people_remain
+
+        return next_obs, reward, done, {"total_time": total_time, "people_remain": people_remain, "total_people": total_people}
 
     # [floor1 waiting, ... floorn waiting, floor1 target, .. floorn target, elevator1 target,..., elevatorn target, elevator floor]
     def _next_observation(self):
