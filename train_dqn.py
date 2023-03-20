@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import torch as th
 
 NUM_ROLLOUTS = 200
-EPISODE_LEN = 200
+EPISODE_LEN = 300
 
 
 def train_ppo(env):
@@ -23,7 +23,7 @@ def train_ppo(env):
 
 
 def train_dqn(env):
-    model = DQN("MlpPolicy", env, exploration_final_eps=0.1, verbose=0)
+    model = DQN("MlpPolicy", env, exploration_final_eps=0.03, verbose=0)
     model.learn(total_timesteps=100000)
     model.save("dqn_elevator")
 
@@ -159,21 +159,23 @@ def make_plot(lambdas, elevators, labels):
 
             ax = axs[elevator_idx, label_idx]
 
+            # ax.set_xscale('log')
+
             # Plot for scan
             ax.errorbar(lambdas, mean_vec_scan, yerr=var_vec_scan, fmt='o-',
-                        color='orange', ecolor='red', capsize=5, label="SCAN")
+                        color='black', ecolor='black', capsize=5, label="SCAN")
             ax.fill_between(lambdas, mean_vec_scan-var_vec_scan,
                             mean_vec_scan+var_vec_scan, alpha=0.2, color='black')
 
             # Plot for baselines ppo
             ax.errorbar(lambdas, mean_vec_model_ppo, yerr=var_vec_model_ppo, fmt='o-',
-                        color='blue', ecolor='red', capsize=5, label="PPO")
+                        color='blue', ecolor='blue', capsize=5, label="PPO")
             ax.fill_between(lambdas, mean_vec_model_ppo-var_vec_model_ppo,
                             mean_vec_model_ppo+var_vec_model_ppo, alpha=0.2, color='blue')
 
             # Plot for baselines dqn
             ax.errorbar(lambdas, mean_vec_model_dqn, yerr=var_vec_model_dqn, fmt='o-',
-                        color='blue', ecolor='red', capsize=5, label="DQN")
+                        color='green', ecolor='green', capsize=5, label="DQN")
             ax.fill_between(lambdas, mean_vec_model_dqn-var_vec_model_dqn,
                             mean_vec_model_dqn+var_vec_model_dqn, alpha=0.2, color='green')
 
@@ -183,11 +185,17 @@ def make_plot(lambdas, elevators, labels):
             # ax.fill_between(lambdas, mean_vec_model_a2c-var_vec_model_a2c,
             #                 mean_vec_model_a2c+var_vec_model_a2c, alpha=0.2, color='orange')
 
+            # eps_rewards
+            # eps_avg_time
+            # people_remaining_ratio
+
+            labels = {"eps_rewards": "Total Episode Reward", "eps_avg_time": "Average Service Time",
+                      "people_remaining_ratio": "People Left Unserviced"}
+
             # Set titles
             ax.set_xlabel("Lambda Value")
-            ax.set_ylabel(label)
-            ax.set_title(f"Num elevators = " +
-                         str(elevator_num) + " " + label)
+            ax.set_ylabel(labels[label])
+            ax.set_title(str(elevator_num) + " Elevators " + labels[label])
 
             ax.legend()
 

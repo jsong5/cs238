@@ -1,12 +1,12 @@
 import numpy as np
 import pdb
 import collections
-from NearestNeighborDictionary import KDDict
+
+# An attempt at a tabular approach for elevators. Clearly did not work given the state space :).
 
 
 class QLearning(object):
     def __init__(self, state_enum, action_enum, states, actions, rewards, next_states, discount=0.9, alpha=0.1, epochs=1000):
-        # Do nothing for now.
         self.state_enum = state_enum
         self.action_enum = action_enum
         self.states = states
